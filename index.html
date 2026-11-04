@@ -1,0 +1,388 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#14110f">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="EO1 Remote">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icon.png">
+<title>EO1 Remote</title>
+<!-- EO1 Remote: control an EO1 running EO1bian from anywhere, through its GitHub gallery repository.
+     A static page (GitHub Pages): it talks only to api.github.com, with a fine-grained token the owner pastes once;
+     the token stays in this browser (localStorage) and goes nowhere else. Changes are commits to the gallery repo:
+     control.json (screen, brightness, schedule, ...), gallery.json (albums, hidden pictures) and images/.
+     GitHub builds the gallery, and the EO1 picks it up at its next check (a few minutes). -->
+<style>
+  :root {
+    --bg: #14110f; --card: #1f1a17; --line: #3a312b; --text: #f3ece4; --dim: #a89c90;
+    --accent: #f0a24a; --accent-ink: #1b1209; --danger: #e5675a; --ok: #7bc67e;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 16px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif;
+         padding: max(16px, env(safe-area-inset-top)) 16px max(24px, env(safe-area-inset-bottom)); }
+  main { max-width: 520px; margin: 0 auto; display: grid; gap: 14px; }
+  header { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+  h1 { font-size: 22px; margin: 0; letter-spacing: .02em; }
+  a { color: var(--accent); }
+  .muted { color: var(--dim); font-size: 13px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 16px; padding: 14px; display: grid; gap: 12px; }
+  button, .file { appearance: none; border: 1px solid var(--line); background: #2a231e; color: var(--text); border-radius: 12px;
+                  padding: 14px 10px; font: inherit; font-weight: 600; min-height: 52px; cursor: pointer; text-align: center; }
+  button:active, .file:active { transform: scale(.98); }
+  button.primary, .file { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+  button.on { outline: 2px solid var(--accent); }
+  button:disabled { opacity: .45; }
+  label.line { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+  .switch { display: flex; gap: 8px; }
+  .switch button { flex: 1; min-height: 44px; padding: 10px; font-weight: 500; }
+  input[type=range] { width: 100%; accent-color: var(--accent); height: 32px; }
+  .text-in { width: 100%; background: #2a231e; color: var(--text); border: 1px solid var(--line); border-radius: 10px; padding: 12px; font: inherit; }
+  .times { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 15px; }
+  .times input[type=time] { background: #2a231e; color: var(--text); border: 1px solid var(--line); border-radius: 10px; padding: 8px; font: inherit; }
+  select { background: #2a231e; color: var(--text); border: 1px solid var(--line); border-radius: 10px; padding: 10px; font: inherit; width: 100%; }
+  .chips { display: flex; flex-wrap: wrap; gap: 8px; }
+  .chips button { min-height: 38px; padding: 6px 12px; font-weight: 500; border-radius: 999px; }
+  .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+  .thumb { position: relative; }
+  .thumb img, .thumb .ph { width: 100%; aspect-ratio: 9/16; object-fit: cover; border-radius: 8px; display: block; background: #000; }
+  .thumb .ph { display: flex; align-items: center; justify-content: center; padding: 6px; font-size: 11px; color: var(--dim);
+               text-align: center; word-break: break-all; background: #2a231e; }
+  .thumb .acts { position: absolute; top: 6px; right: 6px; display: flex; gap: 4px; }
+  .thumb .acts button { min-height: 0; padding: 4px 9px; border-radius: 999px; background: rgba(0,0,0,.65); color: #fff; border: 0;
+                        font-size: 13px; font-weight: 500; }
+  .thumb.is-hidden img, .thumb.is-hidden .ph { opacity: .3; filter: grayscale(1); }
+  .thumb .tag { position: absolute; left: 6px; bottom: 6px; font-size: 11px; background: rgba(0,0,0,.7); padding: 2px 6px;
+                border-radius: 6px; text-transform: uppercase; letter-spacing: .04em; }
+  .file input { display: none; }
+  #sendbar { position: sticky; bottom: max(12px, env(safe-area-inset-bottom)); display: none; }
+  #sendbar.show { display: block; }
+  #sendbar button { width: 100%; box-shadow: 0 6px 24px rgba(0,0,0,.5); }
+  #toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); background: #000; color: #fff; padding: 10px 16px;
+           border-radius: 999px; font-size: 14px; opacity: 0; transition: opacity .2s; pointer-events: none; max-width: 90vw; z-index: 5; }
+  #toast.show { opacity: .92; }
+  ol { margin: 0; padding-left: 20px; } li { margin: 4px 0; }
+  code { background: #000; padding: 1px 5px; border-radius: 5px; font-size: 14px; }
+</style>
+</head>
+<body>
+<main>
+  <header><h1>EO1 Remote</h1><span class="muted" id="repoName"></span></header>
+
+  <!-- sign in: the gallery repository and a fine-grained token, kept only in this browser -->
+  <section class="card" id="login" style="display:none">
+    <div>Control your EO1 from anywhere through its GitHub gallery. At home the EO1's own control page is faster;
+      this works from everywhere else.</div>
+    <ol class="muted">
+      <li>On GitHub: <b>Settings › Developer settings › Fine-grained tokens › Generate new token</b>.</li>
+      <li>Repository access: <b>only your gallery repository</b>. Permissions: <b>Contents: Read and write</b>
+        (and <b>Actions: Read</b> to see when GitHub has built it).</li>
+      <li>Paste it here. It stays in this browser and is only sent to GitHub.</li>
+    </ol>
+    <input class="text-in" id="inRepo" placeholder="you/eo1-gallery" autocomplete="off" autocapitalize="off" spellcheck="false">
+    <input class="text-in" id="inToken" type="password" placeholder="github_pat_..." autocomplete="off">
+    <button class="primary" onclick="signIn()">Connect</button>
+    <div class="muted" id="loginMsg"></div>
+  </section>
+
+  <div id="app" style="display:none; gap:14px">
+    <section class="card">
+      <label class="line"><span>Status</span><span class="muted" id="build"></span></label>
+      <div class="muted">Changes are saved to GitHub; GitHub prepares them and the EO1 picks them up at its next check,
+        usually within 5-10 minutes.</div>
+    </section>
+
+    <section class="card">
+      <label class="line"><span>Screen</span></label>
+      <div class="switch">
+        <button id="screen-off" onclick="set('screen', 'off')">Off</button>
+        <button id="screen-on" onclick="set('screen', 'on')">On</button>
+      </div>
+    </section>
+
+    <section class="card">
+      <label class="line"><span>Brightness</span><span class="muted" id="brv"></span></label>
+      <input type="range" id="br" min="1" max="100" oninput="$('brv').textContent = this.value + ' %'" onchange="set('brightness', +this.value)">
+      <div class="switch">
+        <button id="auto-off" onclick="set('auto_brightness', false)">Manual</button>
+        <button id="auto-on" onclick="set('auto_brightness', true)">Automatic</button>
+      </div>
+    </section>
+
+    <section class="card">
+      <label class="line"><span>Schedule</span><span class="muted">the screen sleeps, the slideshow waits</span></label>
+      <div class="switch">
+        <button id="sch-off" onclick="setSchedule(false)">Off</button>
+        <button id="sch-on" onclick="setSchedule(true)">On</button>
+      </div>
+      <div class="times">Off from <input type="time" id="off1" value="23:00" onchange="setSchedule()"> to <input type="time" id="on1" value="07:00" onchange="setSchedule()"></div>
+    </section>
+
+    <section class="card">
+      <label class="line"><span>Each picture</span></label>
+      <select id="interval" onchange="set('seconds_per_picture', +this.value)">
+        <option value="0">As the gallery says</option><option value="30">30 seconds</option><option value="60">1 minute</option>
+        <option value="300">5 minutes</option><option value="900">15 minutes</option><option value="3600">1 hour</option>
+        <option value="21600">6 hours</option><option value="86400">1 day</option>
+      </select>
+    </section>
+
+    <section class="card">
+      <label class="line"><span>Titles</span></label>
+      <div class="switch">
+        <button id="titles-off" onclick="set('titles', false)">Off</button>
+        <button id="titles-on" onclick="set('titles', true)">On</button>
+      </div>
+      <div class="switch">
+        <button id="font-sans" onclick="set('title_font', 'sans')">Modern</button>
+        <button id="font-eo" onclick="set('title_font', 'eo')">EO style</button>
+        <button id="font-serif" onclick="set('title_font', 'serif')">Classic</button>
+      </div>
+      <label class="line"><span>Around pictures</span></label>
+      <div class="switch">
+        <button id="edges-blur" onclick="set('edges', 'blur')">Blur</button>
+        <button id="edges-mat" onclick="set('edges', 'mat')">Mat</button>
+        <button id="edges-black" onclick="set('edges', 'black')">Black</button>
+      </div>
+    </section>
+
+    <section class="card" id="albumCard" style="display:none">
+      <label class="line"><span>Albums</span><span class="muted">none chosen = everything</span></label>
+      <div class="chips" id="albums"></div>
+    </section>
+
+    <section class="card">
+      <label class="line"><span>Pictures</span><span class="muted" id="count"></span></label>
+      <label class="file">＋ Add pictures<input type="file" accept="image/*" multiple onchange="upload(this.files)"></label>
+      <div class="muted" id="upmsg"></div>
+      <div class="grid" id="pics"></div>
+    </section>
+
+    <section class="card">
+      <button onclick="signOut()">Sign out on this phone</button>
+      <div class="muted">EO1bian Remote. Your token is stored only in this browser.</div>
+    </section>
+
+    <div id="sendbar"><button class="primary" id="sendbtn" onclick="send()">Send to EO1</button></div>
+  </div>
+</main>
+<div id="toast"></div>
+<script>
+const $ = id => document.getElementById(id);
+const API = 'https://api.github.com';
+let cfg = JSON.parse(localStorage.getItem('eo1remote') || 'null');   // {repo, token}
+let branch = 'main', control = {}, controlSha = null, gallery = {}, gallerySha = null, tree = [], manifest = {items: []};
+let pending = {}, galleryChanged = false;
+
+function toast(t) { const e = $('toast'); e.textContent = t; e.classList.add('show'); clearTimeout(e.t); e.t = setTimeout(() => e.classList.remove('show'), 2600); }
+const b64enc = s => btoa(unescape(encodeURIComponent(s)));
+const b64dec = s => decodeURIComponent(escape(atob(s.replace(/\n/g, ''))));
+const esc = s => String(s).replace(/[&<>"']/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[c]));
+const encPath = p => p.split('/').map(encodeURIComponent).join('/');
+
+async function gh(path, opts = {}) {
+  const r = await fetch(API + path, {...opts, headers: {Authorization: 'Bearer ' + cfg.token, Accept: 'application/vnd.github+json',
+    'X-GitHub-Api-Version': '2022-11-28', ...(opts.headers || {})}});
+  if (r.status === 404 && opts.allow404) return null;
+  if (!r.ok) {
+    const j = await r.json().catch(() => ({}));
+    throw new Error(r.status === 401 ? 'The token was not accepted (expired or wrong)' :
+                    r.status === 403 ? 'The token may not do this (check its permissions)' : (j.message || 'GitHub error ' + r.status));
+  }
+  return opts.raw ? r.blob() : r.json();
+}
+async function getFile(path, ref) {
+  const j = await gh(`/repos/${cfg.repo}/contents/${encPath(path)}?ref=${encodeURIComponent(ref)}`, {allow404: true});
+  return j ? {text: b64dec(j.content), sha: j.sha} : {text: null, sha: null};
+}
+async function putFile(path, contentB64, sha, message) {
+  return gh(`/repos/${cfg.repo}/contents/${encPath(path)}`, {method: 'PUT',
+    body: JSON.stringify({message, content: contentB64, branch, ...(sha ? {sha} : {})})});
+}
+
+function showLogin(msg) {
+  $('login').style.display = 'grid'; $('app').style.display = 'none';
+  if (cfg) $('inRepo').value = cfg.repo;
+  $('loginMsg').textContent = msg || '';
+}
+async function signIn() {
+  const repo = $('inRepo').value.trim().replace(/^https?:\/\/github\.com\//, '').replace(/\/$/, '');
+  const token = $('inToken').value.trim();
+  if (!/^[\w.-]+\/[\w.-]+$/.test(repo)) return showLogin('Type the repository as owner/name.');
+  if (!token) return showLogin('Paste the token.');
+  cfg = {repo, token};
+  try { await load(); localStorage.setItem('eo1remote', JSON.stringify(cfg)); $('inToken').value = ''; }
+  catch (e) { showLogin(e.message); }
+}
+function signOut() { localStorage.removeItem('eo1remote'); cfg = null; location.reload(); }
+
+async function load() {
+  const info = await gh(`/repos/${cfg.repo}`);
+  branch = info.default_branch || 'main';
+  const c = await getFile('control.json', branch);
+  control = c.text ? JSON.parse(c.text) : {}; controlSha = c.sha;
+  const g = await getFile('gallery.json', branch);
+  gallery = g.text ? JSON.parse(g.text) : {}; gallerySha = g.sha;
+  const t = await gh(`/repos/${cfg.repo}/git/trees/${encodeURIComponent(branch)}?recursive=1`);
+  tree = t.tree.filter(e => e.type === 'blob' && /^(images|videos)\//.test(e.path));
+  const m = await getFile('manifest.json', 'eo1').catch(() => ({text: null}));
+  manifest = m.text ? JSON.parse(m.text) : {items: []};
+  pending = {}; galleryChanged = false;
+  $('login').style.display = 'none'; $('app').style.display = 'grid';
+  $('repoName').textContent = cfg.repo;
+  render(); buildStatus();
+}
+
+// the values shown: what is on GitHub, with this phone's unsent changes on top
+const val = (k, d) => (k in pending ? pending[k] : k in control ? control[k] : d);
+function set(k, v) { pending[k] = v; render(); }
+function setSchedule(enabled) {
+  const cur = val('schedule', {enabled: false, off: '23:00', on: '07:00'});
+  pending.schedule = {...cur, enabled: enabled === undefined ? cur.enabled !== false : enabled, off: $('off1').value, on: $('on1').value};
+  render();
+}
+function render() {
+  const on = (id, yes) => $(id).classList.toggle('on', !!yes);
+  on('screen-on', val('screen') === 'on'); on('screen-off', val('screen') === 'off');
+  const b = val('brightness', null);
+  if (document.activeElement !== $('br')) $('br').value = b || 50;
+  $('brv').textContent = b ? b + ' %' : 'not set';
+  on('auto-on', val('auto_brightness') === true); on('auto-off', val('auto_brightness') === false);
+  const s = val('schedule', null);
+  on('sch-on', s && s.enabled !== false); on('sch-off', s && s.enabled === false);
+  if (s) { $('off1').value = s.off || '23:00'; $('on1').value = s.on || '07:00'; }
+  $('interval').value = String(val('seconds_per_picture', 0));
+  on('titles-on', val('titles') === true); on('titles-off', val('titles') === false);
+  for (const f of ['sans', 'eo', 'serif']) on('font-' + f, val('title_font') === f);
+  for (const e of ['blur', 'mat', 'black']) on('edges-' + e, val('edges') === e);
+  renderPictures();
+  const n = Object.keys(pending).length + (galleryChanged ? 1 : 0);
+  $('sendbar').classList.toggle('show', n > 0);
+  $('sendbtn').textContent = 'Send ' + n + (n === 1 ? ' change' : ' changes') + ' to EO1';
+}
+
+function albumOf(path) { const p = path.split('/'); return p.length > 2 ? p[1] : null; }
+function renderPictures() {
+  const hidden = new Set(gallery.hidden || []), chosen = new Set(gallery.albums || []);
+  const albums = [...new Set(tree.map(e => albumOf(e.path)).filter(Boolean))].sort();
+  $('albumCard').style.display = albums.length ? '' : 'none';
+  $('albums').innerHTML = albums.map(a => `<button class="${chosen.has(a) ? 'on' : ''}" onclick="toggleAlbum('${esc(a)}')">${esc(a)}</button>`).join('');
+  const built = {}; for (const it of manifest.items || []) built[it.source] = it;
+  const files = tree.slice().sort((a, b) => b.path.localeCompare(a.path));
+  $('count').textContent = files.length + (files.length === 1 ? ' file' : ' files');
+  $('pics').innerHTML = files.map(e => {
+    const it = built[e.path], hid = hidden.has(e.path);
+    const pic = it ? `<img data-file="${esc(it.poster || it.file)}" alt="">` : `<div class="ph">${esc(e.path.split('/').pop())}</div>`;
+    return `<div class="thumb${hid ? ' is-hidden' : ''}">${pic}${hid ? '<span class="tag">hidden</span>' : ''}
+      <div class="acts"><button onclick="toggleHide('${esc(e.path)}')">${hid ? 'Show' : 'Hide'}</button>
+      <button onclick="del('${esc(e.path)}', '${e.sha}')">✕</button></div></div>`;
+  }).join('');
+  lazyThumbs();
+}
+// thumbnails from the built gallery (branch eo1), fetched with the token when they scroll into view
+const thumbCache = {};
+const io = 'IntersectionObserver' in window ? new IntersectionObserver(es => es.forEach(e => {
+  if (e.isIntersecting) { io.unobserve(e.target); thumb(e.target); } }), {rootMargin: '200px'}) : null;
+function lazyThumbs() { document.querySelectorAll('img[data-file]').forEach(img => io ? io.observe(img) : thumb(img)); }
+async function thumb(img) {
+  const f = img.dataset.file;
+  try {
+    thumbCache[f] = thumbCache[f] || URL.createObjectURL(await gh(`/repos/${cfg.repo}/contents/${encPath(f)}?ref=eo1`,
+      {raw: true, headers: {Accept: 'application/vnd.github.raw'}}));
+    img.src = thumbCache[f];
+  } catch (e) {}
+}
+function toggleAlbum(a) {
+  const s = new Set(gallery.albums || []); s.has(a) ? s.delete(a) : s.add(a);
+  gallery.albums = [...s]; galleryChanged = true; render();
+}
+function toggleHide(p) {
+  const s = new Set(gallery.hidden || []); s.has(p) ? s.delete(p) : s.add(p);
+  gallery.hidden = [...s]; galleryChanged = true; render();
+}
+async function del(path, sha) {
+  if (!confirm('Delete ' + path.split('/').pop() + ' from your gallery? It disappears from the EO1 too.')) return;
+  try {
+    await gh(`/repos/${cfg.repo}/contents/${encPath(path)}`, {method: 'DELETE',
+      body: JSON.stringify({message: 'EO1 Remote: delete ' + path, sha, branch})});
+    tree = tree.filter(e => e.path !== path); render(); toast('Deleted');
+  } catch (e) { toast(e.message); }
+}
+
+async function send() {
+  $('sendbtn').disabled = true;
+  try {
+    if (Object.keys(pending).length) {
+      const next = {...control, ...pending};
+      const r = await putFile('control.json', b64enc(JSON.stringify(next, null, 2) + '\n'), controlSha,
+                              'EO1 Remote: ' + Object.keys(pending).join(', '));
+      control = next; controlSha = r.content.sha; pending = {};
+    }
+    if (galleryChanged) {
+      const r = await putFile('gallery.json', b64enc(JSON.stringify(gallery, null, 2) + '\n'), gallerySha, 'EO1 Remote: albums and hidden pictures');
+      gallerySha = r.content.sha; galleryChanged = false;
+    }
+    toast('Sent. The EO1 follows within about 5-10 minutes.');
+    setTimeout(buildStatus, 4000);
+  } catch (e) {
+    toast(e.message + (/sha|match/i.test(e.message) ? ' - reloading' : ''));
+    if (/sha|match/i.test(e.message)) load().catch(() => {});
+  }
+  $('sendbtn').disabled = false; render();
+}
+
+// a picture from the phone: turned upright, at most 2160 px on its long side, as JPEG, into images/Phone/
+function shrink(file) {
+  return new Promise((ok, bad) => {
+    const img = new Image();
+    img.onload = () => {
+      const s = Math.min(1, 2160 / Math.max(img.naturalWidth, img.naturalHeight));
+      const c = document.createElement('canvas');
+      c.width = Math.round(img.naturalWidth * s); c.height = Math.round(img.naturalHeight * s);
+      c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+      URL.revokeObjectURL(img.src);
+      ok(c.toDataURL('image/jpeg', 0.9).split(',')[1]);
+    };
+    img.onerror = () => bad(new Error('not a picture this browser can read'));
+    img.src = URL.createObjectURL(file);
+  });
+}
+async function upload(files) {
+  const list = [...files];
+  for (let i = 0; i < list.length; i++) {
+    const f = list[i];
+    $('upmsg').textContent = `Uploading ${i + 1} of ${list.length}...`;
+    try {
+      const stamp = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 14);
+      const name = f.name.replace(/\.[^.]+$/, '').replace(/[^\w .-]+/g, '_').slice(0, 60) || 'picture';
+      const path = `images/Phone/${stamp}-${name}.jpg`;
+      const r = await putFile(path, await shrink(f), null, 'EO1 Remote: add ' + name);
+      tree.unshift({path, sha: r.content.sha, type: 'blob'});
+    } catch (e) { toast(f.name + ': ' + e.message); }
+  }
+  $('upmsg').textContent = list.length ? 'Added. GitHub prepares them, then the EO1 shows them.' : '';
+  // only some albums chosen: the phone's pictures would not show, so their album joins the choice
+  if ((gallery.albums || []).length && !gallery.albums.includes('Phone')) {
+    gallery.albums = [...gallery.albums, 'Phone']; galleryChanged = true; await send();
+  }
+  render(); setTimeout(buildStatus, 4000);
+}
+
+async function buildStatus() {
+  try {
+    const j = await gh(`/repos/${cfg.repo}/actions/runs?per_page=1`);
+    const r = (j.workflow_runs || [])[0];
+    if (!r) { $('build').textContent = ''; return; }
+    const mins = Math.max(0, Math.round((Date.now() - new Date(r.updated_at)) / 60000));
+    $('build').textContent = r.status !== 'completed' ? 'GitHub is preparing your changes...' :
+      r.conclusion === 'success' ? `Ready on GitHub (${mins ? mins + ' min ago' : 'just now'})` : 'GitHub could not build it: open Actions';
+    if (r.status !== 'completed') setTimeout(buildStatus, 15000);
+  } catch (e) { $('build').textContent = ''; }   // no Actions permission: fine
+}
+
+if (cfg) load().catch(e => showLogin(e.message)); else showLogin();
+</script>
+</body>
+</html>
